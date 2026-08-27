@@ -25,7 +25,65 @@
 
 此方式适用于已将框架发布到公司 Nexus 私服或本地 Maven 仓库（`mavenLocal`）的场景，无需手动拷贝任何文件。
 
-### 1. 配置仓库与插件应用
+### 1. 在 `settings.gradle` / `settings.gradle.kts` 中配置插件仓库
+
+需要确保 Gradle 能够在 `pluginManagement` 中找到 OperLog 插件。
+
+#### Groovy DSL (`settings.gradle`):
+```groovy
+pluginManagement {
+    repositories {
+        mavenLocal()
+        // 1. 公司内网 Nexus 私服仓库（HTTP 需设置 allowInsecureProtocol = true）
+        maven {
+            url 'http://10.1.74.176:8001/repository/maven-releases/'
+            allowInsecureProtocol = true
+        }
+        maven {
+            url 'http://10.1.74.176:8001/repository/maven-neusoft/'
+            allowInsecureProtocol = true
+        }
+        // 2. 阿里云 Maven 镜像（解决网络访问与 TLS 握手问题）
+        maven { url 'https://maven.aliyun.com/repository/public' }
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+```
+
+#### Kotlin DSL (`settings.gradle.kts`):
+```kotlin
+pluginManagement {
+    repositories {
+        mavenLocal()
+        // 1. 公司内网 Nexus 私服仓库
+        maven {
+            url = uri("http://10.1.74.176:8001/repository/maven-releases/")
+            isAllowInsecureProtocol = true
+        }
+        maven {
+            url = uri("http://10.1.74.176:8001/repository/maven-neusoft/")
+            isAllowInsecureProtocol = true
+        }
+        // 2. 阿里云 Maven 镜像
+        maven { url = uri("https://maven.aliyun.com/repository/public") }
+        maven { url = uri("https://maven.aliyun.com/repository/google") }
+        maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
+
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+```
+
+---
+
+### 2. 在业务 App 模块应用插件
 
 #### Kotlin DSL (`build.gradle.kts`):
 ```kotlin
@@ -44,7 +102,9 @@ plugins {
 }
 ```
 
-### 2. 引入 Runtime 依赖
+---
+
+### 3. 引入 Runtime 依赖
 
 #### Kotlin DSL (`build.gradle.kts`):
 ```kotlin
