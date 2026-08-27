@@ -14,7 +14,13 @@ object ClassFilter {
         "kotlinx/",
         "dagger/",
         "hilt/",
-        "com/google/android/"
+        "com/google/",
+        "okhttp3/",
+        "okio/",
+        "retrofit2/",
+        "com/bumptech/glide/",
+        "io/reactivex/",
+        "org/apache/"
     )
 
     fun isTargetClass(className: String, config: OperLogConfigParams): Boolean {

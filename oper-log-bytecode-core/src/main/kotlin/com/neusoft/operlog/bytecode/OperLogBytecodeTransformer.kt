@@ -5,6 +5,25 @@ import org.objectweb.asm.ClassWriter
 import org.objectweb.asm.Opcodes
 
 /**
+ * Custom ClassWriter that overrides getCommonSuperClass to prevent ClassNotFoundException
+ * during ASM frame computation when analyzing third-party or Android SDK classes.
+ */
+class SafeClassWriter(
+    reader: ClassReader,
+    flags: Int
+) : ClassWriter(reader, flags) {
+
+    override fun getCommonSuperClass(type1: String, type2: String): String {
+        return try {
+            super.getCommonSuperClass(type1, type2)
+        } catch (e: Throwable) {
+            // Fallback to java/lang/Object when class resolution fails on plugin ClassLoader
+            "java/lang/Object"
+        }
+    }
+}
+
+/**
  * Single ASM Bytecode Transformer entry point.
  */
 object OperLogBytecodeTransformer {
@@ -25,8 +44,7 @@ object OperLogBytecodeTransformer {
                 return classBytes
             }
 
-            // COMPUTE_FRAMES automatically generates StackMapTable entries required for try-catch blocks
-            val writer = ClassWriter(reader, ClassWriter.COMPUTE_FRAMES)
+            val writer = SafeClassWriter(reader, ClassWriter.COMPUTE_FRAMES)
             val cv = OperLogClassVisitor(Opcodes.ASM9, writer, config)
             reader.accept(cv, ClassReader.EXPAND_FRAMES)
 
