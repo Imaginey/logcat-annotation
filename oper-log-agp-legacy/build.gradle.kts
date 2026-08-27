@@ -21,6 +21,7 @@ publishing {
 }
 
 dependencies {
+    compileOnly("com.android.tools.build:gradle:7.2.2")
     implementation(project(":oper-log-bytecode-core"))
     implementation(project(":oper-log-annotation"))
 }

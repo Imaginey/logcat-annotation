@@ -3,7 +3,10 @@ package com.neusoft.operlog.plugin
 import com.android.build.api.instrumentation.FramesComputationMode
 import com.android.build.api.instrumentation.InstrumentationScope
 import com.android.build.api.variant.AndroidComponentsExtension
+import com.android.build.gradle.BaseExtension
+import com.neusoft.operlog.agp.legacy.OperLogLegacyTransform
 import com.neusoft.operlog.agp.modern.OperLogModernAsmFactory
+import com.neusoft.operlog.bytecode.OperLogConfigParams
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 
@@ -24,8 +27,8 @@ class OperLogGradlePlugin : Plugin<Project> {
     private fun configureAndroidPlugin(project: Project, extension: OperLogExtension) {
         val androidComponents = project.extensions.findByType(AndroidComponentsExtension::class.java)
 
-        if (androidComponents != null) {
-            println("[OperLog] Modern AGP Component API detected. Registering Modern AGP Adapter.")
+        if (androidComponents != null && supportsInstrumentationApi()) {
+            println("[OperLog] Modern AGP Component API (AGP >= 7.2.0) detected. Registering Modern AGP Adapter.")
             androidComponents.onVariants { variant ->
                 val isRelease = variant.buildType == "release"
                 if (isRelease && !extension.enableInRelease) {
@@ -56,8 +59,32 @@ class OperLogGradlePlugin : Plugin<Project> {
                 )
             }
         } else {
-            println("[OperLog] Legacy AGP detected. Routing to Legacy Adapter pipeline.")
-            // Legacy AGP routing fallback notice
+            println("[OperLog] Legacy AGP detected (AGP < 7.2.0). Registering Legacy Transform API pipeline.")
+            val baseExtension = project.extensions.findByType(BaseExtension::class.java)
+            if (baseExtension != null) {
+                val config = OperLogConfigParams(
+                    enabled = extension.enabled,
+                    includePackages = extension.includePackages,
+                    excludePackages = extension.excludePackages,
+                    printArgs = extension.printArgs,
+                    printThread = extension.printThread,
+                    printResult = extension.printResult,
+                    measureTime = extension.measureTime
+                )
+                baseExtension.registerTransform(OperLogLegacyTransform(config))
+            } else {
+                println("[OperLog] Warning: BaseExtension not found. Legacy AGP transform registration skipped.")
+            }
+        }
+    }
+
+    private fun supportsInstrumentationApi(): Boolean {
+        return try {
+            val variantClass = Class.forName("com.android.build.api.variant.Variant")
+            variantClass.getMethod("getInstrumentation")
+            true
+        } catch (e: Throwable) {
+            false
         }
     }
 }
