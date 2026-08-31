@@ -1,7 +1,7 @@
 package com.neusoft.operlog.bytecode
 
 /**
- * Filter to determine whether a class should be processed by OperLog.
+ * Filter to determine whether a class should be processed by OperLog with exact package boundary checking.
  */
 object ClassFilter {
 
@@ -52,18 +52,18 @@ object ClassFilter {
             return false
         }
 
-        // Exclude packages specified in excludePackages
+        // Exclude packages specified in excludePackages (exact package boundary matching)
         for (exclude in config.excludePackages) {
-            if (exclude.isNotEmpty() && dotName.startsWith(exclude)) {
+            if (exclude.isNotEmpty() && (dotName == exclude || dotName.startsWith("$exclude."))) {
                 return false
             }
         }
 
-        // If includePackages specified, must match at least one
+        // If includePackages specified, must match at least one (exact package boundary matching)
         if (config.includePackages.isNotEmpty()) {
             var matched = false
             for (include in config.includePackages) {
-                if (include.isNotEmpty() && dotName.startsWith(include)) {
+                if (include.isNotEmpty() && (dotName == include || dotName.startsWith("$include."))) {
                     matched = true
                     break
                 }

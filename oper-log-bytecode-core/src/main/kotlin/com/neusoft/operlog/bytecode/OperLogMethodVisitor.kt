@@ -7,7 +7,7 @@ import org.objectweb.asm.Type
 import org.objectweb.asm.commons.AdviceAdapter
 
 /**
- * ASM MethodVisitor responsible for method instrumentation.
+ * ASM MethodVisitor responsible for method instrumentation with compile-time allocation optimizations.
  */
 class OperLogMethodVisitor(
     api: Int,
@@ -38,30 +38,42 @@ class OperLogMethodVisitor(
     override fun onMethodEnter() {
         startTimeLocal = newLocal(Type.LONG_TYPE)
 
-        // 1. Generate parameter names array ([Ljava/lang/String;)
-        pushArrayOfStrings(paramNames.toTypedArray())
+        val printArgs = annotationData.printArgs
         val namesLocal = newLocal(stringArrayType)
-        storeLocal(namesLocal)
-
-        // 2. Generate parameter values array ([Ljava/lang/Object;)
-        val argTypes = argumentTypes
-        push(argTypes.size)
-        newArray(objectType)
-
-        for (i in argTypes.indices) {
-            dup()
-            push(i)
-            loadArg(i)
-            box(argTypes[i])
-            arrayStore(objectType)
-        }
         val valuesLocal = newLocal(objectArrayType)
-        storeLocal(valuesLocal)
-
-        // 3. Generate ignored parameter indexes array ([I)
-        pushArrayOfInts(ignoredParamIndexes.toIntArray())
         val ignoredLocal = newLocal(intArrayType)
-        storeLocal(ignoredLocal)
+
+        if (printArgs) {
+            // 1. Generate parameter names array ([Ljava/lang/String;)
+            pushArrayOfStrings(paramNames.toTypedArray())
+            storeLocal(namesLocal)
+
+            // 2. Generate parameter values array ([Ljava/lang/Object;)
+            val argTypes = argumentTypes
+            push(argTypes.size)
+            newArray(objectType)
+
+            for (i in argTypes.indices) {
+                dup()
+                push(i)
+                loadArg(i)
+                box(argTypes[i])
+                arrayStore(objectType)
+            }
+            storeLocal(valuesLocal)
+
+            // 3. Generate ignored parameter indexes array ([I)
+            pushArrayOfInts(ignoredParamIndexes.toIntArray())
+            storeLocal(ignoredLocal)
+        } else {
+            // Optimization: Skip array allocation & boxing completely when printArgs=false
+            push(null as String?)
+            storeLocal(namesLocal)
+            push(null as String?)
+            storeLocal(valuesLocal)
+            push(null as String?)
+            storeLocal(ignoredLocal)
+        }
 
         // 4. Push arguments for OperLogRuntime.enter(...)
         push(className)
@@ -70,7 +82,7 @@ class OperLogMethodVisitor(
         loadLocal(namesLocal)
         loadLocal(valuesLocal)
         loadLocal(ignoredLocal)
-        push(annotationData.printArgs)
+        push(printArgs)
         push(annotationData.printThread)
 
         invokeStatic(

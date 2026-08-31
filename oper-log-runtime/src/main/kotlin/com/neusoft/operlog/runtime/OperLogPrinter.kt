@@ -19,24 +19,28 @@ class DefaultOperLogPrinter : OperLogPrinter {
     private val logClass: Class<*>? = try {
         Class.forName("android.util.Log")
     } catch (t: Throwable) {
+        if (t is VirtualMachineError || t is ThreadDeath) throw t
         null
     }
 
     private val logDMethod: Method? = try {
         logClass?.getMethod("d", String::class.java, String::class.java)
     } catch (t: Throwable) {
+        if (t is VirtualMachineError || t is ThreadDeath) throw t
         null
     }
 
     private val logEMethodTwoArgs: Method? = try {
         logClass?.getMethod("e", String::class.java, String::class.java)
     } catch (t: Throwable) {
+        if (t is VirtualMachineError || t is ThreadDeath) throw t
         null
     }
 
     private val logEMethodThreeArgs: Method? = try {
         logClass?.getMethod("e", String::class.java, String::class.java, Throwable::class.java)
     } catch (t: Throwable) {
+        if (t is VirtualMachineError || t is ThreadDeath) throw t
         null
     }
 
@@ -58,10 +62,14 @@ class DefaultOperLogPrinter : OperLogPrinter {
                 logDMethod.invoke(null, tag, message)
                 return
             } catch (t: Throwable) {
-                // Fall through to fallback
+                if (t is VirtualMachineError || t is ThreadDeath) throw t
             }
         }
-        println("D/$tag: $message")
+        try {
+            println("D/$tag: $message")
+        } catch (t: Throwable) {
+            if (t is VirtualMachineError || t is ThreadDeath) throw t
+        }
     }
 
     private fun logError(tag: String, message: String, throwable: Throwable?) {
@@ -75,10 +83,14 @@ class DefaultOperLogPrinter : OperLogPrinter {
                     return
                 }
             } catch (t: Throwable) {
-                // Fall through to fallback
+                if (t is VirtualMachineError || t is ThreadDeath) throw t
             }
         }
-        System.err.println("E/$tag: $message")
-        throwable?.printStackTrace(System.err)
+        try {
+            System.err.println("E/$tag: $message")
+            throwable?.printStackTrace(System.err)
+        } catch (t: Throwable) {
+            if (t is VirtualMachineError || t is ThreadDeath) throw t
+        }
     }
 }

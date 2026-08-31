@@ -35,6 +35,27 @@ class SampleTarget {
         }
         return "Negative-$val1"
     }
+
+    @OperLog(tag = "NoArgsTag", printArgs = false, measureTime = false)
+    fun noArgsAndNoTime(x: Int, y: Int): Long {
+        return (x + y).toLong()
+    }
+
+    @OperLog(tag = "VoidTag")
+    fun doNothing(action: String) {
+        // Void return method
+    }
+
+    @OperLog(tag = "FaultyParamTag", printArgs = true)
+    fun processFaulty(obj: Any): String {
+        return "Processed-Success"
+    }
+}
+
+class FaultyParamObject {
+    override fun toString(): String {
+        throw RuntimeException("Param toString exploded")
+    }
 }
 
 class TestLogPrinter : OperLogPrinter {
@@ -42,21 +63,37 @@ class TestLogPrinter : OperLogPrinter {
     val exitLogs = mutableListOf<String>()
     val errorLogs = mutableListOf<String>()
 
+    var throwOnEnter: Boolean = false
+    var throwOnExit: Boolean = false
+    var throwOnError: Boolean = false
+
     fun clear() {
         enterLogs.clear()
         exitLogs.clear()
         errorLogs.clear()
+        throwOnEnter = false
+        throwOnExit = false
+        throwOnError = false
     }
 
     override fun printEnter(tag: String, message: String) {
+        if (throwOnEnter) {
+            throw RuntimeException("Intentional printEnter exception")
+        }
         enterLogs.add("[$tag] $message")
     }
 
     override fun printExit(tag: String, message: String) {
+        if (throwOnExit) {
+            throw RuntimeException("Intentional printExit exception")
+        }
         exitLogs.add("[$tag] $message")
     }
 
     override fun printError(tag: String, message: String, throwable: Throwable?) {
+        if (throwOnError) {
+            throw RuntimeException("Intentional printError exception")
+        }
         errorLogs.add("[$tag] $message (throwable=${throwable?.javaClass?.simpleName})")
     }
 }
@@ -72,6 +109,7 @@ class BytecodeCoreTest {
     private val printer = TestLogPrinter()
 
     fun setUp() {
+        OperLogConfig.enabled = true
         OperLogConfig.customPrinter = printer
         printer.clear()
     }
@@ -173,8 +211,83 @@ class BytecodeCoreTest {
         assertTrue(printer.exitLogs[0].contains("result=\"Positive-45.5\""), "Multi-return result format mismatch")
         println("  ✓ Method 4 (calculate) multi-return test PASSED")
 
+        printer.clear()
+
+        // Test Method 5: noArgsAndNoTime (printArgs=false, measureTime=false)
+        val noArgsMethod = transformedClass.getMethod("noArgsAndNoTime", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+        val noArgsResult = noArgsMethod.invoke(instance, 100, 200) as Long
+        assertEquals(300L, noArgsResult, "noArgsAndNoTime result mismatch")
+
+        assertEquals(1, printer.enterLogs.size, "Enter log count mismatch")
+        assertTrue(!printer.enterLogs[0].contains("args:"), "Enter log should not contain args when printArgs=false")
+        assertEquals(1, printer.exitLogs.size, "Exit log count mismatch")
+        assertTrue(!printer.exitLogs[0].contains("cost="), "Exit log should not contain cost when measureTime=false")
+        println("  ✓ Method 5 (noArgsAndNoTime) printArgs=false & measureTime=false optimization test PASSED")
+
+        printer.clear()
+
+        // Test Method 6: Fault isolation when Printer throws in printEnter
+        printer.throwOnEnter = true
+        val addMethodIsolated = transformedClass.getMethod("addNumbers", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+        val addResultIsolated = addMethodIsolated.invoke(instance, 5, 15) as Int
+        assertEquals(20, addResultIsolated, "Method should succeed even when printEnter throws")
+        println("  ✓ Fault Isolation 1: Printer exception in printEnter does not affect business method execution")
+
+        printer.clear()
+
+        // Test Method 7: Fault isolation when Printer throws in printExit
+        printer.throwOnExit = true
+        val addResultExitIsolated = addMethodIsolated.invoke(instance, 7, 8) as Int
+        assertEquals(15, addResultExitIsolated, "Method should return original value even when printExit throws")
+        println("  ✓ Fault Isolation 2: Printer exception in printExit does not affect business return value")
+
+        printer.clear()
+
+        // Test Method 8: Fault isolation when Printer throws in printError
+        printer.throwOnError = true
+        try {
+            errorMethod.invoke(instance, "error with faulty printer")
+            fail("Expected business exception to be thrown")
+        } catch (e: InvocationTargetException) {
+            assertTrue(e.targetException is IllegalStateException, "Original business exception must not be replaced")
+            assertEquals("error with faulty printer", e.targetException.message, "Original exception message must be preserved")
+        }
+        println("  ✓ Fault Isolation 3: Printer exception in printError does not replace original business exception")
+
+        printer.clear()
+
+        // Test Method 9: Faulty parameter toString() does not break business execution
+        val faultyMethod = transformedClass.getMethod("processFaulty", Any::class.java)
+        val faultyObj = FaultyParamObject()
+        val faultyResult = faultyMethod.invoke(instance, faultyObj) as String
+        assertEquals("Processed-Success", faultyResult, "Business method must execute normally with faulty toString param")
+        assertEquals(1, printer.enterLogs.size, "Enter log count mismatch")
+        println("  ✓ Fault Isolation 4: Parameter with faulty toString() does not break business method execution")
+
+        printer.clear()
+
+        // Test Method 10: OperLogConfig.enabled = false
+        OperLogConfig.enabled = false
+        val addResultDisabled = addMethod.invoke(instance, 1, 2) as Int
+        assertEquals(3, addResultDisabled, "Method must execute normally when OperLogConfig.enabled=false")
+        assertEquals(0, printer.enterLogs.size, "No enter logs when disabled")
+        assertEquals(0, printer.exitLogs.size, "No exit logs when disabled")
+        OperLogConfig.enabled = true
+        println("  ✓ OperLogConfig.enabled=false runtime disable test PASSED")
+
+        // Test Package Boundary Matching
+        val configParams = OperLogConfigParams(
+            enabled = true,
+            includePackages = listOf("com.neusoft.sample")
+        )
+        assertTrue(ClassFilter.isTargetClass("com.neusoft.sample.MyController", configParams), "Should match exact sub-package")
+        assertTrue(ClassFilter.isTargetClass("com.neusoft.sample.sub.MyController", configParams), "Should match deep sub-package")
+        assertTrue(!ClassFilter.isTargetClass("com.neusoft.sampleapp.MyController", configParams), "Must NOT match prefix-only name com.neusoft.sampleapp")
+        assertTrue(!ClassFilter.isTargetClass("com.neusoft.samples.MyController", configParams), "Must NOT match prefix-only name com.neusoft.samples")
+        println("  ✓ ClassFilter exact package boundary matching test PASSED")
+
         println("\n=======================================================")
-        println("  ALL OPERLOG BYTECODE CORE TESTS PASSED SUCCESSFULLY! ")
+        println("  ALL OPERLOG BYTECODE CORE & FAULT ISOLATION TESTS PASSED! ")
         println("=======================================================\n")
     }
 

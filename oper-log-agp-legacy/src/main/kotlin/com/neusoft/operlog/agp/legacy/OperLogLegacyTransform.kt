@@ -25,8 +25,7 @@ class OperLogLegacyTransform(
     override fun getScopes(): MutableSet<in QualifiedContent.Scope> {
         return mutableSetOf(
             QualifiedContent.Scope.PROJECT,
-            QualifiedContent.Scope.SUB_PROJECTS,
-            QualifiedContent.Scope.EXTERNAL_LIBRARIES
+            QualifiedContent.Scope.SUB_PROJECTS
         )
     }
 

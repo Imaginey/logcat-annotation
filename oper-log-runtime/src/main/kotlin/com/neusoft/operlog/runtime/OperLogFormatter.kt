@@ -1,11 +1,15 @@
 package com.neusoft.operlog.runtime
 
+import java.util.Collections
+import java.util.IdentityHashMap
 import java.lang.reflect.Array as JavaArray
 
 /**
- * Formats method parameters, return values, and objects safely with size and length limits.
+ * Formats method parameters, return values, and objects safely with size, length, and recursion limits.
  */
 object OperLogFormatter {
+
+    private const val MAX_RECURSION_DEPTH = 5
 
     fun formatArgs(
         names: Array<String>?,
@@ -16,35 +20,59 @@ object OperLogFormatter {
             return ""
         }
 
-        val ignoredSet = ignoredIndexes?.toSet() ?: emptySet()
-        val sb = StringBuilder()
+        return try {
+            val ignoredSet = ignoredIndexes?.toSet() ?: emptySet()
+            val sb = StringBuilder()
 
-        for (i in values.indices) {
-            if (i > 0) {
-                sb.append(", ")
+            for (i in values.indices) {
+                if (i > 0) {
+                    sb.append(", ")
+                }
+
+                val paramName = if (names != null && i < names.size && names[i].isNotEmpty()) {
+                    names[i]
+                } else {
+                    "arg$i"
+                }
+
+                sb.append(paramName).append("=")
+
+                if (ignoredSet.contains(i)) {
+                    sb.append(SensitiveValuePolicy.mask(values[i]))
+                } else {
+                    val visited = Collections.newSetFromMap(IdentityHashMap<Any, Boolean>())
+                    sb.append(formatValueInternal(values[i], visited, 0))
+                }
             }
 
-            val paramName = if (names != null && i < names.size && names[i].isNotEmpty()) {
-                names[i]
-            } else {
-                "arg$i"
-            }
-
-            sb.append(paramName).append("=")
-
-            if (ignoredSet.contains(i)) {
-                sb.append(SensitiveValuePolicy.mask(values[i]))
-            } else {
-                sb.append(formatValue(values[i]))
-            }
+            sb.toString()
+        } catch (t: Throwable) {
+            if (t is VirtualMachineError || t is ThreadDeath) throw t
+            "<args formatting failed>"
         }
-
-        return sb.toString()
     }
 
     fun formatValue(value: Any?): String {
+        return try {
+            val visited = Collections.newSetFromMap(IdentityHashMap<Any, Boolean>())
+            formatValueInternal(value, visited, 0)
+        } catch (t: Throwable) {
+            if (t is VirtualMachineError || t is ThreadDeath) throw t
+            "<value formatting failed>"
+        }
+    }
+
+    private fun formatValueInternal(
+        value: Any?,
+        visited: MutableSet<Any>,
+        depth: Int
+    ): String {
         if (value == null) {
             return "null"
+        }
+
+        if (depth > MAX_RECURSION_DEPTH) {
+            return "<max-depth-reached>"
         }
 
         val formatted = when (value) {
@@ -52,11 +80,11 @@ object OperLogFormatter {
             is Char -> "'$value'"
             is Boolean, is Byte, is Short, is Int, is Long, is Float, is Double, is Number -> value.toString()
             is Enum<*> -> value.name
-            is Collection<*> -> formatCollection(value)
-            is Map<*, *> -> formatMap(value)
+            is Collection<*> -> formatCollection(value, visited, depth)
+            is Map<*, *> -> formatMap(value, visited, depth)
             else -> {
                 if (value.javaClass.isArray) {
-                    formatArray(value)
+                    formatArray(value, visited, depth)
                 } else {
                     formatObject(value)
                 }
@@ -66,80 +94,122 @@ object OperLogFormatter {
         return truncateString(formatted)
     }
 
-    private fun formatCollection(col: Collection<*>): String {
-        val maxSize = OperLogConfig.maxCollectionSize
-        val sb = StringBuilder("[")
-        var count = 0
-
-        for (item in col) {
-            if (count >= maxSize) {
-                sb.append(", ...[truncated ${col.size - count} items]")
-                break
-            }
-            if (count > 0) {
-                sb.append(", ")
-            }
-            sb.append(formatValue(item))
-            count++
+    private fun formatCollection(
+        col: Collection<*>,
+        visited: MutableSet<Any>,
+        depth: Int
+    ): String {
+        if (visited.contains(col)) {
+            return "<circular-reference>"
         }
+        visited.add(col)
 
-        sb.append("]")
-        return sb.toString()
+        try {
+            val maxSize = maxOf(0, OperLogConfig.maxCollectionSize)
+            val sb = StringBuilder("[")
+            var count = 0
+
+            for (item in col) {
+                if (count >= maxSize) {
+                    sb.append(", ...[truncated ${col.size - count} items]")
+                    break
+                }
+                if (count > 0) {
+                    sb.append(", ")
+                }
+                sb.append(formatValueInternal(item, visited, depth + 1))
+                count++
+            }
+
+            sb.append("]")
+            return sb.toString()
+        } finally {
+            visited.remove(col)
+        }
     }
 
-    private fun formatArray(array: Any): String {
-        val length = JavaArray.getLength(array)
-        val maxSize = OperLogConfig.maxArraySize
-        val sb = StringBuilder("[")
+    private fun formatArray(
+        array: Any,
+        visited: MutableSet<Any>,
+        depth: Int
+    ): String {
+        if (visited.contains(array)) {
+            return "<circular-reference>"
+        }
+        visited.add(array)
 
-        val limit = Math.min(length, maxSize)
-        for (i in 0 until limit) {
-            if (i > 0) {
-                sb.append(", ")
+        try {
+            val length = JavaArray.getLength(array)
+            val maxSize = maxOf(0, OperLogConfig.maxArraySize)
+            val sb = StringBuilder("[")
+
+            val limit = Math.min(length, maxSize)
+            for (i in 0 until limit) {
+                if (i > 0) {
+                    sb.append(", ")
+                }
+                val element = JavaArray.get(array, i)
+                sb.append(formatValueInternal(element, visited, depth + 1))
             }
-            val element = JavaArray.get(array, i)
-            sb.append(formatValue(element))
-        }
 
-        if (length > maxSize) {
-            sb.append(", ...[truncated ${length - maxSize} items]")
-        }
+            if (length > maxSize) {
+                sb.append(", ...[truncated ${length - maxSize} items]")
+            }
 
-        sb.append("]")
-        return sb.toString()
+            sb.append("]")
+            return sb.toString()
+        } finally {
+            visited.remove(array)
+        }
     }
 
-    private fun formatMap(map: Map<*, *>): String {
-        val maxSize = OperLogConfig.maxMapSize
-        val sb = StringBuilder("{")
-        var count = 0
-
-        for ((key, value) in map) {
-            if (count >= maxSize) {
-                sb.append(", ...[truncated ${map.size - count} entries]")
-                break
-            }
-            if (count > 0) {
-                sb.append(", ")
-            }
-            sb.append(formatValue(key)).append("=").append(formatValue(value))
-            count++
+    private fun formatMap(
+        map: Map<*, *>,
+        visited: MutableSet<Any>,
+        depth: Int
+    ): String {
+        if (visited.contains(map)) {
+            return "<circular-reference>"
         }
+        visited.add(map)
 
-        sb.append("}")
-        return sb.toString()
+        try {
+            val maxSize = maxOf(0, OperLogConfig.maxMapSize)
+            val sb = StringBuilder("{")
+            var count = 0
+
+            for ((key, value) in map) {
+                if (count >= maxSize) {
+                    sb.append(", ...[truncated ${map.size - count} entries]")
+                    break
+                }
+                if (count > 0) {
+                    sb.append(", ")
+                }
+                sb.append(formatValueInternal(key, visited, depth + 1))
+                    .append("=")
+                    .append(formatValueInternal(value, visited, depth + 1))
+                count++
+            }
+
+            sb.append("}")
+            return sb.toString()
+        } finally {
+            visited.remove(map)
+        }
     }
 
     private fun formatObject(obj: Any): String {
         return try {
             obj.toString()
         } catch (t: Throwable) {
-            "${obj.javaClass.name}@${Integer.toHexString(System.identityHashCode(obj))}"
+            if (t is VirtualMachineError || t is ThreadDeath) throw t
+            "<toString() failed: ${t.javaClass.simpleName}>"
         }
     }
 
     private fun truncateString(str: String): String {
-        val maxLen = OperLogConfig.maxValueLength
+        val maxLen = maxOf(0, OperLogConfig.maxValueLength)
         if (str.length <= maxLen) {
             return str
         }

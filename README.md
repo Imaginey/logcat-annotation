@@ -1,6 +1,6 @@
 # OperLog 跨平台方法日志注解框架 - 开发者接入与 API 使用文档 (Kotlin & Java)
 
-> **文档版本**：V1.0.0  
+> **文档版本**：V1.0.0 (工业级加固版)  
 > **适用语言**：Kotlin & Java 混合工程 / 纯 Java 工程 / 纯 Kotlin 工程  
 > **适用对象**：Android 业务开发工程师、SDK 开发工程师  
 > **环境要求**：JDK 8+、Android API 30+ (Android 11 ~ 15)、Gradle 7.x / 8.x
@@ -11,12 +11,12 @@
 
 `OperLog` 是公司级独立的 Android 跨平台切面日志注解框架。通过在方法上标注 `@OperLog` 注解，框架在**编译期**利用 ASM 字节码插桩技术自动注入日志代码，实现**零业务侵入**的方法执行追踪。完美支持 **Kotlin** 与 **Java** 源码。
 
-### 核心功能
+### 核心设计原则与优势
+- **旁路绝对安全隔离（Fault Isolation）**：日志内部的任何异常（如对象 `toString()` 崩溃、自定义 `Printer` 抛错、容器循环引用）均被静默隔离，**绝对不会影响业务方法正常执行，绝对不会篡改或覆盖业务抛出的原始异常**。
 - **全自动方法追踪**：自动记录方法进入（`ENTER`）、正常退出（`EXIT`）及抛出异常（`ERROR`）。
-- **性能耗时统计**：高精度测量方法执行耗时（毫秒级，保留两位小数）。
-- **线程追踪**：自动获取并打印当前执行线程名称。
+- **性能零损耗优化**：当 `printArgs = false` 或 `OperLogConfig.enabled = false` 时，编译期直接跳过参数数组创建与基本类型装箱，运行期零额外 GC 开销。
+- **循环引用与大对象防爆**：内置对象身份（Identity）循环引用检测与递归深度限制，防止复杂数据结构引发 `StackOverflowError`。
 - **敏感参数脱敏**：配合 `@OperLogIgnore` 注解，自动将敏感参数（如密码、秘钥、身份证号）替换为 `***`，防止日志泄漏隐私。
-- **大对象与防爆内存截断**：内置参数与返回值长度截断机制，防止巨型字符串或集合引发 OOM。
 - **Release 零开销**：支持编译期关闭 Release 变体插桩，生产包零运行时开销。
 
 ---
@@ -27,7 +27,7 @@
 
 ### 1. 在 `settings.gradle` / `settings.gradle.kts` 中配置插件仓库
 
-需要确保 Gradle 能够在 `pluginManagement` 中找到 OperLog 插件。
+确保 Gradle 能够在 `pluginManagement` 中找到 OperLog 插件。
 
 #### Groovy DSL (`settings.gradle`):
 ```groovy
@@ -176,7 +176,7 @@ apply plugin: 'com.neusoft.oper-log'
 
 ---
 
-## 四、注解 API 详细说明
+## 四、注解 API 与安全边界说明
 
 框架提供两个核心注解，位于 `com.neusoft.operlog.annotation` 包下：
 
@@ -184,7 +184,6 @@ apply plugin: 'com.neusoft.oper-log'
 标注需要进行日志切面追踪的方法/函数。可用于 Kotlin 方法和 Java 方法。
 
 ```java
-// Java / Kotlin 均通用定义
 public @interface OperLog {
     String tag() default "";
     boolean printArgs() default true;
@@ -204,11 +203,23 @@ public @interface OperLog {
 
 ---
 
-### 2. `@OperLogIgnore`
-标注方法参数中涉及隐私或敏感数据的入参。
+### 2. `@OperLogIgnore`（参数敏感脱敏）
+标注方法参数中涉及隐私或敏感数据的入参。被标注的参数值将被统一替换为 `***`。
 
-#### 脱敏效果：
-被标注 `@OperLogIgnore` 的参数在日志输出时，其真实值将被统一替换为 `***`。
+---
+
+### 3. ⚠️ 重要安全边界与注意事项（必读）
+
+1. **`@OperLogIgnore` 仅针对参数整体生效**：
+   - `@OperLogIgnore` 会将标注的参数（如 `password`）整体替换为 `***`；
+   - **不会自动递归深度识别**复杂对象（如 `UserDTO`）、`Map` 或 `Collection` 内部包含的嵌套敏感字段；
+2. **返回值与异常消息的敏感数据防护**：
+   - 方法返回值和异常的 `message` 仍可能包含业务敏感数据。对于处理登录、鉴权、支付等敏感操作的方法，**强烈建议显式声明 `@OperLog(printArgs = false, printResult = false)`**，避免输出参数与返回值。
+3. **配置优先级规则**：
+   - **Gradle DSL 提供全局默认值**（如全局设置 `printArgs = false`）；
+   - **方法上显式指定的注解属性覆盖 Gradle DSL**（如某方法标注 `@OperLog(printArgs = true)` 则该方法依然打印参数）。
+4. **Kotlin `suspend` 协程函数边界**：
+   - 由于 Kotlin 协程 `suspend` 函数编译后生成状态机（多次挂起、恢复与调度切换），V1 框架检测到 `suspend` 函数时会**自动跳过插桩并打印构建警告**，避免产生错误的执行耗时或重复日志。
 
 ---
 
@@ -320,9 +331,9 @@ D/Auth:   args: accountName="driver01", passwordSecret=***, idCard=***
 
 ---
 
-### 场景 3：异常诊断与调用链跟踪
+### 场景 3：异常诊断与调用链跟踪（保证原异常完整重抛）
 
-当 Java 或 Kotlin 方法内部抛出异常时，OperLog 会先格式化输出 `ERROR` 诊断日志，再原样重新抛出异常（不影响崩溃上报系统）。
+当 Java 或 Kotlin 方法内部抛出异常时，OperLog 会先格式化输出 `ERROR` 诊断日志，再原样重新抛出原始异常，**绝对不改变异常类型和堆栈**。
 
 #### Java 示例代码：
 ```java
@@ -341,24 +352,7 @@ public class HvacController {
 }
 ```
 
-#### Kotlin 示例代码：
-```kotlin
-package com.neusoft.sample
-
-import com.neusoft.operlog.annotation.OperLog
-
-class HvacController {
-
-    @OperLog(tag = "Hvac", printArgs = true)
-    fun setTemperature(celsius: Int) {
-        if (celsius !in 16..30) {
-            throw IllegalArgumentException("Temperature $celsius is out of valid range (16-30)")
-        }
-    }
-}
-```
-
-#### Logcat 输出效果（Java / Kotlin 完全一致）：
+#### Logcat 输出效果：
 ```text
 D/Hvac: → ENTER HvacController#setTemperature
 D/Hvac:   thread=main
@@ -403,8 +397,8 @@ operLog {
 
 ---
 
-## 七、开发注意事项与最佳实践
+## 七、开发最佳实践
 
-1. **Java / Kotlin 完全通用**：OperLog 的字节码插桩发生在 `.class` 字节码层级，因此对 Java 编写的代码和 Kotlin 编写的代码效果**完全相同**。
-2. **强烈推荐配置 `includePackages`**：显式配置公司主包名（如 `["com.neusoft"]`），可避免扫描无用第三方库，提升 50%+ 编译打包速度。
-3. **敏感信息安全**：任何接收密码、密钥、身份证、银行卡号等敏感信息的参数，无论 Java 还是 Kotlin，**必须**标注 `@OperLogIgnore` 注解。
+1. **Java / Kotlin 完全通用**：OperLog 发生在 `.class` 字节码层级，因此对 Java 与 Kotlin 效果**完全相同**。
+2. **显式配置 `includePackages`**：配置公司主包名（如 `["com.neusoft"]`），可跳过所有第三方库扫描，大幅提升编译打包速度。
+3. **敏感信息安全防护**：任何接收密码、密钥等凭据的参数，**必须**标注 `@OperLogIgnore`。
